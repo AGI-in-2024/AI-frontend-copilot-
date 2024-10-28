@@ -2,7 +2,7 @@ import asyncio
 import logging
 import os
 import re
-from typing import Dict, Any, Union, List
+from typing import Dict, Any, Union, List, Tuple
 
 from langchain_community.vectorstores import FAISS
 from langchain_core.output_parsers import PydanticOutputParser, StrOutputParser, CommaSeparatedListOutputParser
@@ -36,9 +36,9 @@ try:
     def_ret = db.as_retriever(
         search_type="mmr",
         search_kwargs={
-            'k': 6,
-            'lambda_mult': 0.51,
-            'fetch_k': 50
+            'k': 3,
+            'lambda_mult': 0.42,
+            'fetch_k': 30
         }
     )
     dbg_ret = db.as_retriever(
@@ -61,7 +61,7 @@ class Component(BaseModel):
 
 class FunnelOutput(BaseModel):
     needed_components: list[Component] = Field(
-        description="список необходимых компонентов для реализииции запроса пользователя")
+        description="Cписок необходимых компонентов для реализииции запроса пользователя")
 
 
 class FunnelIterOutput(BaseModel):
@@ -72,7 +72,10 @@ class FunnelIterOutput(BaseModel):
 
 class InterfaceGeneratingState(BaseModel):
     query: str | None = Field(default=None)
-    components: FunnelOutput | None = Field(default=None, description="Релевантные для интерфейса компоненты")
+    components: list[Component] | None = Field(
+        default=None,
+        description="Cписок необходимых компонентов для реализииции запроса пользователя"
+    )
     code: str | None = Field(default=code_sample, description="Код компонента")
     errors: str | None | list[Any] = Field(default=None, description="Ошибки вознкшие при генерации кода")
 
@@ -88,6 +91,7 @@ class InterfaceGeneratingState(BaseModel):
 
 
 async def funnel(state: InterfaceGeneratingState):
+    logging.info(f"Funnel...")
     if llm is None:
         state.errors = "LLM not initialized properly"
         return state
@@ -102,7 +106,6 @@ async def funnel(state: InterfaceGeneratingState):
             }
         )
 
-        print(f"\n\nITER_FUNNEL out: {res}")
         state.instructions = res.instructions
         state.components_to_modify = res.components_to_modify
     else:
@@ -114,35 +117,51 @@ async def funnel(state: InterfaceGeneratingState):
             }
         )
 
-        print(f"\n\nNeeded comps {res}")
-        state.components = res
-
+        state.components = [cmp for cmp in res.needed_components if f'{cmp.title}:' in components_descs]
+    logging.info(f"Needed components: {state.components}")
     return state
 
 
 async def search_docs(queries: list[str], is_dbg: bool = False):
-    retriever = def_ret
-    if is_dbg:
-        retriever = dbg_ret
-    qrs = []
-    docs = []
+    logging.info(f"Looking for cached queries in {len(docs_cache)}...")
+
+    def truncate_content(content):
+        sentences = content.splitlines()
+        if len(sentences) > 250:
+            content = '\n'.join(sentences[:250]) + '...'
+        return content
+
+    retriever = (def_ret, dbg_ret)[is_dbg]
+
+    dbg = {}
+    qrs, docs = [], []
+    queries = set(queries)
     for q in queries:
         if q in docs_cache:
             docs.append(docs_cache[q])
+            dbg[q] = docs_cache[q]
         else:
             qrs.append(q)
+    logging.info(f"Retrieving {len(qrs)} queries...")
     if qrs:
         tasks = [retriever.ainvoke(query) for query in qrs]
         results = await asyncio.gather(*tasks)
 
         for i, result in enumerate(results):
+            for doc in result:
+                doc.page_content = truncate_content(doc.page_content)
             docs += result
             docs_cache[qrs[i]] = result
+            dbg[qrs[i]] = result
 
+    logging.info(f"{len(docs)} docs collected.")
+    logging.info(dbg)
+    logging.info('*' * 50)
     return docs
 
 
 async def write_code(state: InterfaceGeneratingState):
+    logging.info(f"Writer...")
     interface_coder_chain = (
             {
                 "interface_components": lambda x: x["interface_components"],
@@ -179,79 +198,76 @@ async def write_code(state: InterfaceGeneratingState):
         })
     else:
         interface_code = interface_coder_chain.invoke({
-            "query": state.query,
+            "query": state.query + str(state.components),
             "code_sample": state.code,
             "interface_components": await search_docs(
-                [f"Detailed ARG TYPES of props a component {x.title} can have and CODE examples of using {x.title}"
-                 for x in state.components.needed_components]
+                [f"Detailed argsTypes, index and props of a component {x.title} can have and CODE examples of using {x.title}"
+                 for x in state.components]
             )
         })
 
     state.code = interface_code
-    print(f"\nWritten code: {interface_code}")
-
+    logging.info(f"Written code: {state.code}")
     return state
 
 
-async def debug_docs_v2(code: str, errors_list: list[Dict[str, Any]]) -> list[str]:
-    query_prompt = (
-            {
-                "code": lambda x: x["code"],
-                "errors_list": lambda x: x["errors_list"]
-            }
-            | QUERY_GENERATOR
-            | llm
-            | CommaSeparatedListOutputParser()
-    )
+async def debug_docs(code: str, errors_list: list[Dict[str, Any]]) -> tuple[str, list[Any] | str]:
+    logging.info(f"Making queries for fixing...")
+    queries = []
+    code_lines = code.splitlines()
+    pattern = r'\W([A-Z]{2}[a-z]+)'
 
-    queries = query_prompt.invoke({
-        "code": code,
-        "errors_list": errors_list
-    })
+    for error in errors_list:
+        line_num = error['location'][0] - 1
+        error_message = f"//ERROR {error['code']}: {error['message']}"
+        matches = set(re.findall(pattern, error['message']))
+        if matches:
+            queries += matches
+        elif len(queries) < 3:
+            queries.append(f'useful code samples to fix {error['message']}')
+        if line_num < len(code_lines):
+            code_lines[line_num] = code_lines[line_num] + error_message
+        else:
+            code_lines.append(error_message)
 
-    print(f"QUERIES TO FIX BUGS: {queries}")
-    res = "No special information needed to fix these errors"
-    if queries:
-        res = await search_docs(queries, True)
+    annotated_code = f"code with error messages :\n" + "\n".join(code_lines)
+    logging.info(f"{queries}")
+    docs = await search_docs(queries, True) if queries else "No special information needed to fix these errors"
 
-    return res
+    return annotated_code, docs
 
 
 async def revise_code(state: InterfaceGeneratingState):
+    logging.info(f"Reviser...")
     interface_debugger_chain = (
             {
                 "useful_info": lambda x: x["useful_info"],  # Передаём найденные доки по ошибкам
-                "interface_code": lambda x: x["interface_code"],
-                "errors_list": lambda x: x["errors_list"]
+                "interface_code": lambda x: x["interface_code"]
             }
             | DEBUGGER
             | llm
             | StrOutputParser()
     )
-    docs = await debug_docs_v2(state.code, state.errors)
+    code, docs = await debug_docs(state.code, state.errors)
+    logging.info(f"rewriting code...")
+    logging.info(code)
 
     fixed_code = interface_debugger_chain.invoke(
         {
-            "interface_code": state.code,
-            "errors_list": state.errors,
+            "interface_code": code,
             "useful_info": docs
         }
     )
 
-    print(f"Fixed code: {fixed_code}")
-
     state.code = fixed_code
-
+    logging.info(f"Revised code: {state.code}")
     return state
 
 
 async def compile_code(state: InterfaceGeneratingState):
-    tsx_code = state.code
-    clean_code = re.sub(r"```(jsx|tsx)\s*|\s*```", "", tsx_code)
-    state.code = clean_code
-    validation_result = validator.validate_tsx(clean_code.strip())
-
-    print(f"Validation res: {validation_result}")
+    logging.info(f"compile node...")
+    state.code = re.sub(r"```(jsx|tsx)\s*|\s*```", "", state.code)
+    validation_result = validator.validate_tsx(state.code.strip())
 
     if validation_result["valid"]:
         state.errors = ""
@@ -259,7 +275,7 @@ async def compile_code(state: InterfaceGeneratingState):
             state.query = state.query + state.new_query
     else:
         state.errors = validation_result["errors"]
-
+    logging.info(f"compiling completed.")
     return state
 
 
@@ -272,7 +288,7 @@ async def compile_interface(state: InterfaceGeneratingState):
 
 
 async def generate(query: str) -> str:
-    logging.info(f"Starting generation for query: {query}")
+    logging.info(f"generate func started")
 
     try:
         # Set up configuration with retry mechanism
@@ -308,7 +324,7 @@ async def generate(query: str) -> str:
         graph = builder.compile(checkpointer=memory)
 
         try:
-            logging.info(f"\n\nEXECUTING WITH STATE: {cur_state}")
+            logging.info(f"graph invoking...")
             state = await graph.ainvoke(cur_state, config)
             logging.info("Generation process completed successfully.")
             if isinstance(state, dict):

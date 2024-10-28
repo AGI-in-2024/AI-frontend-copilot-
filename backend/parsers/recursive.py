@@ -206,10 +206,6 @@ def parse_recursivly_store_faiss():
 
 def get_comps_descs() -> str:
     with open(OUTPUT_JSON_PATH, 'r', encoding="utf=8") as file:
-        comps_descs = json.load(file)
+        comps_descs = json.load(file)['descriptions']
 
-    descs = []
-    [descs.append(f' COMPONENT {k}: {v}') for k, v in comps_descs.items()]
-    descs = "\n".join(descs)
-
-    return descs
+    return "\n".join([f'{k}: {v}' for k, v in comps_descs.items()])

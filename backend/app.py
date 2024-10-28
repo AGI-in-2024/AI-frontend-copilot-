@@ -2,19 +2,30 @@ import os
 from flask import Flask, request, jsonify, make_response
 from flask_cors import CORS  # Import CORS
 import traceback
-from langchain_anthropic import ChatAnthropic
+from langchain_openai import ChatOpenAI   # Import GPT-4
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from backend.models.workflow import generate
+from backend.models.prompts import get_ui_improvement_prompt  # Import the new function
+from backend.models.prompts import get_ui_description_prompt
+from backend.models.prompts import get_quick_improve_prompt
 
 app = Flask(__name__)
 CORS(app, resources={r"/*": {"origins": "http://localhost:3000"}})
 
-# Initialize the Claude model
-llm = ChatAnthropic(
-    model="claude-3.5-sonnet",
-    temperature=0.3,
-    max_tokens=8000,
+smart_llm = ChatOpenAI(
+    model="gpt-4o",
+    temperature=0,
+    max_tokens=4000,
+    timeout=None,
+    max_retries=2,
+    api_key=os.environ.get('OPENAI_API_KEY')
+)
+
+fast_llm = ChatOpenAI(
+    model="gpt-4o-mini",
+    temperature=0,
+    max_tokens=4000,
     timeout=None,
     max_retries=2,
     api_key=os.environ.get('ANTROPIC_API_KEY')
@@ -27,29 +38,37 @@ async def generate_ui():
     app.logger.info(f"Received data: {data}")
 
     if not data or 'question' not in data:
-        app.logger.error("Invalid or missing question in request")
-        return jsonify({"error": "Invalid or missing question in request"}), 400
+        return _handle_invalid_request()
 
     question = data['question']
 
     try:
-        app.logger.info(f"Processing question: {question}")
-        result = await generate(question)
-        app.logger.info(f"Generated result: {result[:100]}...")  # Log first 100 chars
-        result = jsonify({"result": result})
-        # response = llm.invoke([
-        #     SystemMessage(content="You are a helpful assistant that improves visability of react code, keeps all nlmk components, and returns only code and nothing else. no ```"),
-        #     HumanMessage(content=f"Here is the code, improve it: {result}")  # Assuming 'result' is a Response object
-        # ]
-        # )
-        
-        # return jsonify({"result": response.content})
-        return result
-
+        result = await _process_question(question)
+        # response = _invoke_llm(str(result), question)  # Pass the code to _invoke_llm
+        return jsonify({"result": result})
     except Exception as e:
-        app.logger.error(f"Error in generate_ui: {str(e)}")
-        app.logger.error(f"Traceback: {traceback.format_exc()}")
-        return jsonify({"error": f"An error occurred: {str(e)}"}), 500
+        return _handle_exception(e)
+
+def _handle_invalid_request():
+    app.logger.error("Invalid or missing question in request")
+    return jsonify({"error": "Invalid or missing question in request"}), 400
+
+async def _process_question(question):
+    result = await generate(question)
+    # return jsonify({"result": result})
+    return result
+
+def _invoke_llm(result, question):  # Change to synchronous function
+    prompt = get_ui_improvement_prompt(result, question)
+    return fast_llm.invoke([
+        SystemMessage(content="You are a senior React developer."),
+        HumanMessage(content=prompt)
+    ])
+
+def _handle_exception(e):
+    app.logger.error(f"Error in generate_ui: {str(e)}")
+    app.logger.error(f"Traceback: {traceback.format_exc()}")
+    return jsonify({"error": f"An error occurred: {str(e)}"}), 500
 
 
 # Add this new route for debugging
@@ -102,6 +121,56 @@ def _build_cors_preflight_response():
 def _corsify_actual_response(response, status_code=200):
     response.headers.add("Access-Control-Allow-Origin", "http://localhost:3000")
     return response, status_code
+
+@app.route('/generate-description', methods=['POST'])
+async def generate_description():
+    app.logger.info("Received request to /generate-description")
+    data = request.json
+    app.logger.info(f"Received data: {data}")
+
+    if not data or 'question' not in data:
+        return _handle_invalid_request()
+
+    question = data['question']
+
+    try:
+        response = _invoke_llm_for_description(question)
+        return jsonify({"result": response.content})
+    except Exception as e:
+        return _handle_exception(e)
+
+def _invoke_llm_for_description(question):
+    prompt = get_ui_description_prompt(question)
+    return fast_llm.invoke([
+        SystemMessage(content="You are a UI/UX expert specializing in creating detailed interface descriptions. Your description will be used to generate react code with nlmk components."),
+        HumanMessage(content=prompt)
+    ])
+
+@app.route('/quick-improve', methods=['POST'])
+async def quick_improve():
+    app.logger.info("Received request to /quick-improve")
+    data = request.json
+    app.logger.info(f"Received data: {data}")
+
+    if not data or 'code' not in data or 'design' not in data or 'modification' not in data:
+        return _handle_invalid_request()
+
+    code = data['code']
+    design = data['design']
+    modification = data['modification']
+
+    try:
+        response = _invoke_llm_for_quick_improve(code, design, modification)
+        return jsonify({"result": response.content})
+    except Exception as e:
+        return _handle_exception(e)
+
+def _invoke_llm_for_quick_improve(code, design, modification):
+    prompt = get_quick_improve_prompt(code, design, modification)
+    return fast_llm.invoke([
+        SystemMessage(content="You are a senior React developer specializing in improving and optimizing React code."),
+        HumanMessage(content=prompt)
+    ])
 
 if __name__ == '__main__':
     app.run(debug=True)

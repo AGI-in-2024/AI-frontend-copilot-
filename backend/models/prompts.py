@@ -9,13 +9,15 @@ FUNNEL = ChatPromptTemplate.from_messages(
         (
             "human",
             """User's query: {query}
-            You MUST select components only from the provided list:
+            You must chose components only provided below:
+            <components name:description>
             {components}
-
+            </components>
+            
             Your response must be a strictly formatted JSON structured list:
             needed_components: [
                 dict(
-                    "title": "Component Name",  # название компонента из NLMK
+                    "title": "Component Name",  # название компонента из списка который я тебе передал
                     "reason": "User query mapping"  # Какие требования пользователя может покрыть этот компонент
                 ),
                 ...
@@ -64,47 +66,63 @@ FUNNEL_ITER = ChatPromptTemplate.from_messages(
     ]
 )
 
-
 CODER = ChatPromptTemplate.from_messages(
     [
         (
             "system",
-            "You are a highly skilled front-end developer specializing in React and TypeScript. Your task is to generate TypeScript (TSX) code for a user interface based on a user's query and the provided component definitions. You can ONLY use the props and components described in the provided documentation."
+            "You are a highly skilled front-end developer specializing in React and TypeScript. Your task is to generate TypeScript (TSX) code for a user interface based on the user's query and the provided component definitions. Only use props and components described in the provided documentation, following each definition exactly."
         ),
         (
             "human",
             '''
-            User's query:
+            User's query and specifications for the components:
             {query}
 
-            ADDITIONAL SOURCE FILES with crucial information about these Components: Types, Styles, and Code examples:
-            {interface_components}
-
             Your task is to:
-            1. **Use ONLY props and components from the provided SOURCE FILES**:
-               - You CANNOT invent or assume any props that are not explicitly described in the provided documentation.
-               - If a prop is required in the source file (doesn't have a question mark `?`), you MUST initialize it.
-               - DO NOT add, modify, or assume props, types, or behavior beyond what is strictly defined in the source files.
-               - Your code must ONLY use the components and props exactly as described in the provided documentation.
+            1. **Strictly follow the provided component definitions**:
+               - **Do not assume** or add any props, behaviors, or styles that are not explicitly defined in the source files.
+               - **Initialize all required props** exactly as described in the source documentation. If a prop does not have a question mark `?`, it must be initialized.
+               - Avoid **incomplete or incorrect prop values** by carefully reviewing each prop in the source files.
+               - Each prop should be initialized on a separate line for clarity. Be specific about the purpose and expected value of each prop, ensuring it aligns precisely with the provided documentation
 
-            2. **Ensure compatibility with TypeScript**:
-               - The final code must be fully type-safe, with all necessary TypeScript annotations in place.
+            2. **Check for common mistakes in prop assignments**:
+               - Pay attention to props that require specific types or values, such as booleans, handlers, or enums.
+               - If a component definition does not list a prop, **do not add it** in the code.
 
-            3. **Use only the necessary imports**:
-               - Import components and types exclusively from the `@nlmk/ds-2.0` library.
-               - DO NOT import or use any other external files, libraries, or components.
+            3. **Ensure TypeScript compatibility**:
+               - The final code must be fully type-safe and compile-ready without any missing types or required props.
+               - **Use only the imports from `@nlmk/ds-2.0`** for components and types. Do not import any additional libraries, files, or dependencies.
 
-            4. **Ensure the final code is well-formatted**:
-               - The code must be clean, organized, and properly formatted for a React project, ready to compile without errors.
-
-            The final code should look like this:
+            4. **Use Box component for layout structure**:
+               - Use the `Box` component with props like `display`, `flexDirection`, `justifyContent`, and `gap` to manage layout, referring only to the source files' description of the `Box` component props.
+                <Box`s props names:description>
+                    display: Defines the Box container's type. The default is "flex" for flexible layouts, but it also supports values like "block," "inline-block," "grid," and "none."
+                    flexDirection: Controls the direction of elements inside the Box. Use "row" for horizontal, "column" for vertical, "row-reverse" to reverse horizontal, and "column-reverse" to reverse vertical.
+                    justifyContent: Aligns content along the main axis. Options include "flex-start" (aligns to the start), "center" (centers elements), and "space-between" or "space-around" (adds space between elements).
+                    alignItems: Aligns elements along the cross-axis. "flex-start" aligns items at the beginning, "center" centers items, and "stretch" expands them to fill the container.
+                    gap: Controls spacing between elements inside the Box. The default is "24px" but can be customized.
+                    (p, px, py, pt, pb, pl, pr): Adjust Box padding. "p" sets padding on all sides; "px" and "py" handle horizontal and vertical padding, respectively; "pt," "pb," "pl," and "pr" set padding on specific sides.
+                    background: Sets the Box background color. Accepts any valid color value.
+                    height and width: Control the Box's height and width, supporting any units.
+                    maxWidth: Limits the Box's maximum width, useful for responsive layouts.
+                    border: Adds a border to the Box, accepting standard CSS border values.
+                    borderRadius: Rounds the Box corners.
+                </Box`s props name:description>
+                
+            5. **Use the provided example format**:
+               - Follow the example format for organization and clarity, ensuring the code is clean, readable, and organized for a React project.
+            
+            The provided source files contain the component definitions:
+            <components source files>
+            {interface_components}
+            </components source files>
+        
+            Example of expected final code:
             {code_sample}
             '''
         ),
     ]
 )
-
-
 
 CODER_ITER = ChatPromptTemplate.from_messages(
     [
@@ -142,21 +160,20 @@ code_sample = """
             ```tsx
             // Import necessary components
             import React from 'react';
-            import { ComponentName1, ComponentName2 } from '@nlmk/ds-2.0';
+            import { Box, place here other components names that u are using in the interface } from '@nlmk/ds-2.0';
 
             // Main component structure based on JSON
             const Interface = () => {
               return (
-                <div>
-                  {/* Render components here based on users query and components list. Keep users wants of structure!*/}
-                </div>
+                <Box>
+                {/* Render components here based on users query and components list.*/}
+                </Box>
               );
             };
 
             // Export the main component
             export default Interface;
             ```
-            
             DONT ADD ANY COMMENTS IN THE CODE!
             """
 
@@ -164,40 +181,36 @@ DEBUGGER = ChatPromptTemplate.from_messages(
     [
         (
             "system",
-            "You are a highly skilled front-end developer specializing in React and TypeScript. Your task is to rewrite the faulty lines or components in the provided TypeScript (TSX) code based on the exact component definitions from the documentation. No assumptions or new props should be added beyond what's in the documentation."
+            "You are a highly skilled front-end developer specializing in React and TypeScript. Your task is to correct all lines with errors in the provided TypeScript (TSX) code. Each line with an error is indicated by an error comment at the end of the line, formatted as `// ERROR TS***: [description]`."
         ),
         (
             "human",
             '''
-            Here is the current code with errors:
+            Here is the current code with errors, indicated at the end of the line where they occur:
             {interface_code}
 
-            Component definitions and documentation:
+            <source codes that can help you to fix bugs>
             {useful_info}
-
-            List of errors identified:
-            {errors_list}
-
+            </source codes that can help you to fix bugs>
+            
             Your task:
-            1. **Rewrite the problematic lines or the entire component**:
-               - Only use the props and types defined in the documentation (`useful_info`).
-               - Remove any incorrect props or types and replace them with the correct ones as per the documentation.
-               - Ensure that all required props are included, especially those without a question mark.
-               - Add or fix any missing imports for components from `@nlmk/ds-2.0`.
-
-            2. **Ensure full TypeScript compatibility**:
-               - The final code must be fully type-safe, with no type mismatches or missing props.
-
-            3. **Return only the corrected code**:
-               - Do not include explanations, comments, or any extra information.
-               - Return just the fixed TypeScript code.
+            1. **Correct every line with an error**:
+               - Use only the props and types defined in the provided documentation (`useful_info`).
+               - Carefully replace any incorrect props or types with the correct ones, ensuring full alignment with the definitions in `useful_info`.
+               - Include all required props for each component, particularly those without a question mark in the type definition.
+               - Correct or add any missing imports for components from `@nlmk/ds-2.0` as needed.
+            
+            2. **Ensure complete TypeScript compatibility**:
+               - The resulting code must be type-safe, with no type mismatches or missing props.
+            
+            3. **Output only the corrected code**:
+               - Provide only the fixed TypeScript code without any explanations, comments, or additional information.
+            
+            Your primary task is to ensure that each error-indicated line is revised according to both the error messages and the `useful_info` documentation.
             '''
         ),
     ]
 )
-
-
-
 
 QUERY_GENERATOR = ChatPromptTemplate.from_messages(
     [
@@ -226,9 +239,6 @@ QUERY_GENERATOR = ChatPromptTemplate.from_messages(
         ),
     ]
 )
-
-
-
 
 
 def get_ui_improvement_prompt(result, question):
@@ -260,6 +270,7 @@ def get_ui_improvement_prompt(result, question):
     all text in the code must be in russian.
     """
 
+
 def get_ui_description_prompt(question):
     return f"""
     Generate a detailed description for a user interface based on the following input: {question}
@@ -270,6 +281,7 @@ def get_ui_description_prompt(question):
     example output:
     {example_output}
     """
+
 
 def get_quick_improve_prompt(code, design, modification):
     return f"""
@@ -351,7 +363,6 @@ component_description = """
     }
 }
 """
-
 
 test_prompt = """
 
