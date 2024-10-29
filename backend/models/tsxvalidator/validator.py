@@ -9,9 +9,10 @@ import sys
 from typing import Dict, Any, List, Optional
 from pathlib import Path
 
+
 # Настройка логирования
 logging.basicConfig(
-    level=logging.DEBUG,
+    level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[
         logging.FileHandler("tsx_validator.log"),
@@ -65,29 +66,34 @@ class TSXValidator:
 
     def _create_tsconfig(self):
         tsconfig = {
-            "compilerOptions": {
-                "target": "es2015",
-                "lib": ["dom", "dom.iterable", "esnext"],
-                "allowJs": True,
-                "skipLibCheck": True,
-                "esModuleInterop": True,
-                "allowSyntheticDefaultImports": True,
-                "strict": True,
-                "forceConsistentCasingInFileNames": True,
-                "noFallthroughCasesInSwitch": True,
-                "module": "esnext",
-                "moduleResolution": "node",
-                "resolveJsonModule": True,
-                "isolatedModules": True,
-                "noEmit": True,
-                "jsx": "react-jsx",
-                "baseUrl": "./tsx_validator_env",
-                "paths": {
-                    "@components/*": ["node_modules/@nlmk/ds-2.0/lib/dist/components/*"]
-                }
-            },
-            "include": ["src/**/*"],
-            "exclude": ["node_modules"]
+          "compilerOptions": {
+            "noEmit": True,
+            "incremental": True,
+            "extendedDiagnostics": True,
+            "target": "es2015",
+            "module": "esnext",
+            "allowJs": True,
+            "skipLibCheck": False,
+            "esModuleInterop": True,
+            "allowSyntheticDefaultImports": True,
+            "strict": True,
+            "forceConsistentCasingInFileNames": True,
+            "noFallthroughCasesInSwitch": True,
+            "moduleResolution": "node",
+            "resolveJsonModule": True,
+            "isolatedModules": True,
+            "jsx": "react-jsx",
+            "baseUrl": "./",
+            "paths": {
+              "@components/*": ["node_modules/@nlmk/ds-2.0/lib/dist/components/*"]
+            }
+          },
+          "include": [
+            "src/temp_*.tsx"
+          ],
+          "exclude": [
+            "node_modules"
+          ]
         }
         tsconfig_path = self.base_dir / "tsconfig.json"
         with open(tsconfig_path, "w") as f:
@@ -107,7 +113,6 @@ class TSXValidator:
 
     def _check_typescript(self) -> Optional[str]:
         logger.info("Checking for TypeScript compiler")
-        # First, check local node_modules
         tsc_path = self.base_dir / "node_modules" / ".bin" / "tsc"
         if self.use_shell:
             tsc_path = tsc_path.with_suffix('.cmd')
@@ -126,9 +131,10 @@ class TSXValidator:
                 return None
 
     def _run_command(self, cmd: List[str]) -> subprocess.CompletedProcess:
+        logger.info(f"Preparing env")
         env = os.environ.copy()
         env['PATH'] = f"{self.base_dir / 'node_modules' / '.bin'}{os.pathsep}{env.get('PATH', '')}"
-        logger.debug(f"Running command: {' '.join(cmd)}")
+        logger.info(f"Running command: {' '.join(cmd)}")
         return subprocess.run(
             cmd,
             shell=self.use_shell,
@@ -141,45 +147,35 @@ class TSXValidator:
 
     def validate_tsx(self, tsx_code: str) -> Dict[str, Any]:
         logger.info("Starting TSX code validation")
-        unique_id = uuid.uuid4().hex
-        temp_file = self.base_dir / "src" / f"temp_{unique_id}.js"
+        temp_file = self.base_dir / "src" / f"temp_{1}.tsx"
 
         try:
             with open(temp_file, "w", encoding='utf-8') as f:
                 f.write(tsx_code)
-            logger.debug(f"Temporary file created: {temp_file}")
-
-            self._log_file_contents(temp_file)
-
-            abs_temp_file = temp_file.resolve()
+            logger.info(f"Temporary file created: {temp_file}")
 
             if not self.tsc_path:
                 raise RuntimeError("TypeScript compiler not found")
 
             cmd = [
                 self.tsc_path,
-                "--noEmit",
-                "--jsx", "react-jsx",
-                "--esModuleInterop",
-                "--allowSyntheticDefaultImports",
-                "--skipLibCheck",
-                "--allowJs",
-                str(abs_temp_file)
+                "--project", str(self.base_dir / "tsconfig.json")
             ]
-            logger.debug(f"Executing command: {' '.join(cmd)}")
 
+            logger.info(f"Executing command: {' '.join(cmd)}...")
             result = self._run_command(cmd)
+            logger.info(f"command executed.")
 
-            logger.debug(f"Command output: {result.stdout}")
-            logger.debug(f"Command errors: {result.stderr}")
-            logger.debug(f"Return code: {result.returncode}")
+            logger.info(f"Command output: {result.stdout}")
+            logger.info(f"Command errors: {result.stderr}")
+            logger.info(f"Return code: {result.returncode}")
 
             parsed_errors = self._parse_errors(result.stderr or result.stdout)
             if not parsed_errors:
                 logger.info("TSX code validation successful")
                 return {"valid": True, "errors": []}
             else:
-                logger.warning("Errors found during TSX code validation")
+                logger.info(f"Errors found during TSX code validation: {parsed_errors}")
                 return {"valid": False, "errors": parsed_errors}
         except Exception as e:
             logger.exception("Unexpected error during validation")
@@ -223,7 +219,7 @@ class TSXValidator:
                     message = error_parts[1].strip()
                     location = re.search(r'\((\d+),(\d+)\)$', location).groups()
                     return {
-                        "location": f"Номер строки c ошибкой {location[0]} и индекс символа {location[1]}",
+                        "location": list(map(int, location)),
                         "code": f"TS{error_code}",
                         "message": message
                     }
@@ -234,6 +230,7 @@ class TSXValidator:
             return None
 
     def _clean_up(self, temp_file: Path):
+        pass
         try:
             if temp_file.exists():
                 temp_file.unlink()
@@ -262,5 +259,4 @@ class TSXValidator:
             issues.append("TypeScript компилятор не найден")
 
         return issues
-
 

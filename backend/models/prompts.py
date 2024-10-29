@@ -9,13 +9,15 @@ FUNNEL = ChatPromptTemplate.from_messages(
         (
             "human",
             """User's query: {query}
-            You MUST select components only from the provided list:
+            You must chose components only provided below:
+            <components name:description>
             {components}
-
+            </components>
+            
             Your response must be a strictly formatted JSON structured list:
             needed_components: [
                 dict(
-                    "title": "Component Name",  # название компонента из NLMK
+                    "title": "Component Name",  # название компонента из списка который я тебе передал
                     "reason": "User query mapping"  # Какие требования пользователя может покрыть этот компонент
                 ),
                 ...
@@ -35,204 +37,143 @@ FUNNEL_ITER = ChatPromptTemplate.from_messages(
             "human",
             """User's previous query: {previous_query}
                User's current query for improvement: {new_query}
-               Existing interface structure: {existing_interface_json}
+               Existing interface code: {existing_code}
                List of NLMK components: {components}
 
-               Based on the new query, determine what needs to be changed in the existing structure and suggest any new or modified components that should be added or updated.
-
-               Your response must be a strictly formatted JSON:
-               instructions: {
-                   "action": "add | modify | remove",
-                   "component": "Component Name",  # название компонента из NLMK
-                   "reason": "User query mapping",  # какое требование пользователя покрывает этот компонент
-               }
-               components_to_modify: [
-                   dict(
-                       "title": "Component Name",  # название компонента из NLMK
-                       "reason": "User query mapping"  # какое требование пользователя покрывает этот компонент
-                   ),
-                   ...
-               ]
+               Your task:
+                - Analyze the previous and new queries to understand what the user wants to achieve.
+                - Review the current code structure to determine what needs to be changed or added to meet the user's new requirements.
+                - Use only components from the NLMK React design system to fulfill the user's request.
+                - The instructions should be written as clear, human-readable steps (e.g., "Add component X to section Y", "Modify component Z to include prop A", etc.).
+                - Be sure to reference the correct component names and describe any necessary prop changes.
+                - Ensure that the instructions align with the user's updated request.
+            
+               Your response must be JUST a DICTIONARY:
+               dict(
+                   instructions: "A **detailed instruction** as a **string** describing what changes to make to the current code, including which components to add, modify, or remove.",
+                   components_to_modify: [
+                       dict(
+                           "title": "Component Name",  # название компонента из NLMK
+                           "reason": "User query mapping"  # какое требование пользователя покрывает этот компонент
+                       ),
+                       ...
+                   ]
+                )
+                
+                DONT WRAP RESPONSE in fromate like "```smth .... ```". You must return only dict!
             """
         ),
     ]
 )
-
-
-init_components_example = """
-initialized_components: [
-                {
-                    "signature": "Component or Subcomponent signature",   # The name of the component or subcomponent from NLMK
-                    "used_reason": "A clear explanation of why this component is used here",  # Reason for this component's presence
-                    "props": { ... },   # A dictionary of props initialized with the provided types and values
-                    "children": [ ... ] # A list of child components, initialized and valid per NLMK rules
-                }
-            ]"""
-
-
-INTERFACE_JSON = ChatPromptTemplate.from_messages(
-    [
-        (
-            "system",
-            "You are a highly experienced front-end TypeScript developer specializing in React. You have deep expertise in component libraries and can quickly understand and apply new components by reviewing their source code and documentation. Your task is to help construct a well-structured interface strictly following the user's request using only components from the NLMK React design system."
-        ),
-        (
-            "human",
-            """User's query:
-            {query}
-
-            STRICT REQUIREMENTS:
-            1. **Components**: You MUST use only the components from the provided list:
-            {needed_components}
-
-            2. **Prop Usage**: All components must use their provided props, respecting the given prop types and values. Initialize all props based on the information provided ONLY in bool or str FORMAT!:
-            {components_info}
-
-            3. **Functional Props**: If a prop is expected to be a function, JUST DESCRIBE ITS BEHAVIOR in str format!.
-
-            4. **Children**: Ensure that components correctly nest their child components where applicable, based on the structure defined in the **Components**. Use the components from the list, ensuring valid child-parent relationships.
-
-            5. **JSON Output**: Your response must be a clear JSON-structured list with no ```formatting:
-            {init_components_example}
-
-            6. **NO Additional Wrapping**: Do not wrap the output in unnecessary JSON blocks or other wrappers. Provide only the required JSON structure.
-
-            7. **Focus**: Stick strictly to the provided components and initialize only their available props and children. Avoid creating additional elements not in the list.
-
-            Respond with a valid, cleanly formatted JSON structure, ensuring all components and props are properly initialized based on the details provided."""
-        ),
-    ]
-)
-
-INTERFACE_JSON_ITER = ChatPromptTemplate.from_messages(
-    [
-        (
-            "system",
-            "You are a highly skilled front-end TypeScript developer specializing in React. You will modify the existing interface structure by applying changes to the components based on user input. Your goal is to update the current structure using NLMK React components."
-        ),
-        (
-            "human",
-            """User's current query:
-               {new_query}
-               Existing interface structure: {existing_interface_json}
-               Needed changes and components to be modified: {modification_instructions}
-
-               Here are the details of the components you need to modify:
-               {components_info}
-
-               Update the current structure and return a strictly formatted JSON:
-               modified_interface: [
-                   dict(
-                       "signature": "Component or Subcomponent signature",   # то как вызывается компонент или подкомпонент из NLMK
-                       "used_reason": "Why it's used",  # причина использования компонента
-                       "props": dict of props, if they are,               # инициализированные пропсы компонента
-                       "children": list[ VALID INITIALIZED CHILDREN ELEMENTS],  # список дочерних элементов  
-                   )
-               ]
-                Put only NLMK COMPONENTS and be sure to init props that i give you earlier!
-                DONT WRAP result in '''json...'''
-                DONT add things like '() =>..' If you are initializing props func - then just describe what should it do!
-            """
-        ),
-    ]
-)
-
 
 CODER = ChatPromptTemplate.from_messages(
     [
         (
             "system",
-            "You are a highly skilled front-end developer specializing in React and TypeScript. Your task is to convert a structured JSON description of a user interface into fully functional React code. The JSON contains information about the components, their props, visual styles, and their hierarchical structure. You should generate code that accurately reflects this structure."
+            "You are a highly skilled front-end developer specializing in React and TypeScript. Your task is to generate TypeScript (TSX) code for a user interface based on the user's query and the provided component definitions. Only use props and components described in the provided documentation, following each definition exactly."
         ),
         (
             "human",
-            """
-            It is a user's query: 
+            '''
+            User's query and specifications for the components:
             {query}
 
-            Here is the JSON structure that describes the interface:
-            {json_structure}
+            Your task is to:
+            1. **Strictly follow the provided component definitions**:
+               - **Do not assume** or add any props, behaviors, or styles that are not explicitly defined in the source files.
+               - **Initialize all required props** exactly as described in the source documentation. If a prop does not have a question mark `?`, it must be initialized.
+               - Avoid **incomplete or incorrect prop values** by carefully reviewing each prop in the source files.
+               - Each prop should be initialized on a separate line for clarity. Be specific about the purpose and expected value of each prop, ensuring it aligns precisely with the provided documentation
 
-            ADDITIONAL SOURCE FILES with extremely useful info about these Components: Types, Styles and Codes examples
+            2. **Check for common mistakes in prop assignments**:
+               - Pay attention to props that require specific types or values, such as booleans, handlers, or enums.
+               - If a component definition does not list a prop, **do not add it** in the code.
+
+            3. **Ensure TypeScript compatibility**:
+               - The final code must be fully type-safe and compile-ready without any missing types or required props.
+               - **Use only the imports from `@nlmk/ds-2.0`** for components and types. Do not import any additional libraries, files, or dependencies.
+
+            4. **Use Box component for layout structure**:
+               - Use the `Box` component with props like `display`, `flexDirection`, `justifyContent`, and `gap` to manage layout, referring only to the source files' description of the `Box` component props.
+                <Box`s props names:description>
+                    display: Defines the Box container's type. The default is "flex" for flexible layouts, but it also supports values like "block," "inline-block," "grid," and "none."
+                    flexDirection: Controls the direction of elements inside the Box. Use "row" for horizontal, "column" for vertical, "row-reverse" to reverse horizontal, and "column-reverse" to reverse vertical.
+                    justifyContent: Aligns content along the main axis. Options include "flex-start" (aligns to the start), "center" (centers elements), and "space-between" or "space-around" (adds space between elements).
+                    alignItems: Aligns elements along the cross-axis. "flex-start" aligns items at the beginning, "center" centers items, and "stretch" expands them to fill the container.
+                    gap: Controls spacing between elements inside the Box. The default is "24px" but can be customized.
+                    (p, px, py, pt, pb, pl, pr): Adjust Box padding. "p" sets padding on all sides; "px" and "py" handle horizontal and vertical padding, respectively; "pt," "pb," "pl," and "pr" set padding on specific sides.
+                    background: Sets the Box background color. Accepts any valid color value.
+                    height and width: Control the Box's height and width, supporting any units.
+                    maxWidth: Limits the Box's maximum width, useful for responsive layouts.
+                    border: Adds a border to the Box, accepting standard CSS border values.
+                    borderRadius: Rounds the Box corners.
+                </Box`s props name:description>
+                
+            5. **Use the provided example format**:
+               - Follow the example format for organization and clarity, ensuring the code is clean, readable, and organized for a React project.
+            
+            The provided source files contain the component definitions:
+            <components source files>
             {interface_components}
-
-            You MUST convert this JSON structure into a working React code using functional NLMK components (its configurations I have described in JSON earlier) and JSX. Make sure to:
-            - Use TypeScript.
-            - Reflect the component hierarchy as per the "children" field in the JSON.
-            - If props are passed in the JSON, ensure they are included in the component invocation and validated against the SOURCE FILES.
-            - Ensure the output is formatted correctly for use in a TypeScript React project.
-
-            YOU MUST USE ONLY PURE react and COMPONENTS from '@nlmk/ds-2.0' that I gave to you!
-            DO NOT USE ANY external or imported stylesheets or styles!
-
-            The final code should look like this:
+            </components source files>
+        
+            Example of expected final code:
             {code_sample}
-
-            """
+            '''
         ),
     ]
 )
-
 
 CODER_ITER = ChatPromptTemplate.from_messages(
     [
         (
             "system",
-            "You are a highly skilled front-end developer specializing in React and TypeScript. Your task is to update existing React code by modifying it according to a new JSON structure that describes changes to the user interface. The JSON contains information about the components, their props, and their hierarchical structure. Your job is to carefully merge these changes into the previous code while maintaining its functionality."
+            "You are a highly skilled front-end developer specializing in React and TypeScript. Your task is to modify and improve existing TypeScript (TSX) code for a user interface based on the user's new request and provided instructions. You should use only the provided components and ensure all necessary imports from the '@nlmk/ds-2.0' library are included in the code."
         ),
         (
             "human",
             """
-            It is a user's query: 
-            {query}
+            Previous user query: {query}
+            New user query: {new_query}
 
-            Here is the previous code:
-            {previous_code}
+            Current interface code that requires modification:
+            {existing_code}
 
-            Here is the updated JSON structure that describes the new interface:
-            {json_structure}
+            Instructions for modification:
+            {instructions}
 
-            ADDITIONAL SOURCE FILES with extremely useful info about these Components: Types, Styles, and Code examples:
+            ADDITIONAL SOURCE FILES with useful information about the components:
             {interface_components}
 
-            You MUST update the previous code according to the new JSON structure and generate working React code using functional NLMK components (as described in JSON). Make sure to:
-            - Modify only the components that need updating, but preserve any existing code that doesn't need changes.
-            - Use TypeScript.
-            - Reflect the updated component hierarchy as per the "children" field in the JSON.
-            - If new props are passed in the JSON, ensure they are included in the component invocation and check their correctness with the help of the SOURCE FILES.
-            - Add Styles from the NLMK library to ensure that interface components are visually structured and correctly placed.
-            - Ensure the final code is formatted correctly for use in a TypeScript React project.
-
-            YOU MUST USE ONLY PURE React and COMPONENTS from '@nlmk/ds-2.0' that I gave to you!
-            DO NOT USE ANY imported STYLES or external libraries!
-
-            The final updated code should look like this:
-            {code_sample}
+            Your task is to:
+            1. **Modify the existing code** based on the user's new query and the instructions provided.
+            2. Ensure **TypeScript annotations** are correct and use best practices for typing in React components.
+            3. Follow the new user query carefully and implement all changes accordingly.
+            4. Ensure the **output code is formatted** and ready for a React project without any TypeScript or prop errors.
+            5. Dont add any comments in response!
             """
         ),
     ]
 )
 
-
 code_sample = """
             ```tsx
             // Import necessary components
             import React from 'react';
-            import { ComponentName1, ComponentName2 } from '@nlmk/ds-2.0';
+            import { Box, place here other components names that u are using in the interface } from '@nlmk/ds-2.0';
 
             // Main component structure based on JSON
             const Interface = () => {
               return (
-                <div>
-                  {/* Render components here based on JSON */}
-                </div>
+                <Box>
+                {/* Render components here based on users query and components list.*/}
+                </Box>
               );
             };
 
             // Export the main component
             export default Interface;
             ```
-            
             DONT ADD ANY COMMENTS IN THE CODE!
             """
 
@@ -240,46 +181,66 @@ DEBUGGER = ChatPromptTemplate.from_messages(
     [
         (
             "system",
-            "You are a highly skilled front-end developer specializing in React and TypeScript. Your task is to review and correct TypeScript code for a user interface based on the provided JSON structure and a list of identified issues. You should modify only the specific lines of code that contain the errors, while ensuring the overall structure and functionality of the interface remains correct."
+            "You are a highly skilled front-end developer specializing in React and TypeScript. Your task is to correct all lines with errors in the provided TypeScript (TSX) code. Each line with an error is indicated by an error comment at the end of the line, formatted as `// ERROR TS***: [description]`."
         ),
         (
             "human",
-            """
-            Here is the JSON structure that describes the interface:
-            {json_structure}
-
-            Here is the current interface code that requires corrections:
+            '''
+            Here is the current code with errors, indicated at the end of the line where they occur:
             {interface_code}
 
-            The following issues have been identified in the code:
-            {errors_list}
-
-            Additionally, here is some useful information, including code examples, that may assist in correcting the code:
+            <source codes that can help you to fix bugs>
             {useful_info}
-
-            Your task is to:
-            1. **Fix TypeScript errors**: 
-               - Use the location and details provided in the error messages to directly target the problematic code sections.
-               - Prioritize fixing TypeScript errors related to types and properties. For example, fix any issues related to type mismatches (`TS2322`) or incorrect property usage.
-               - If a specific type or property does not match, replace it with the correct one based on the documentation or provided examples in `useful_info`.
-            2. **Ensure compatibility**: 
-               - The code must use components and props strictly from the '@nlmk/ds-2.0' library. You may adjust imports or remove unused components to fix the errors.
-            3. **Review JSON structure**: 
-               - After fixing the code, ensure that the JSON structure is accurate and fully reflects the interface components and their properties.
-               - If necessary, make adjustments to the JSON structure based on the fixed code, but only after resolving the code issues.
-            4. **Correct Formatting**:
-               - Ensure the corrected TypeScript code follows best practices and is properly formatted for use in a React project.
-               - Provide the corrected code and updated JSON structure in the format below.
-
-            Return the result as a JSON with the following keys:
-            "fixed_code": "<corrected TypeScript code as a string>",
-            "fixed_structure": {init_components_example}
-
-            Do NOT wrap the result in extra JSON blocks. If you are initializing props functions in the JSON structure, just describe their behavior.
-            """
+            </source codes that can help you to fix bugs>
+            
+            Your task:
+            1. **Correct every line with an error**:
+               - Use only the props and types defined in the provided documentation (`useful_info`).
+               - Carefully replace any incorrect props or types with the correct ones, ensuring full alignment with the definitions in `useful_info`.
+               - Include all required props for each component, particularly those without a question mark in the type definition.
+               - Correct or add any missing imports for components from `@nlmk/ds-2.0` as needed.
+            
+            2. **Ensure complete TypeScript compatibility**:
+               - The resulting code must be type-safe, with no type mismatches or missing props.
+            
+            3. **Output only the corrected code**:
+               - Provide only the fixed TypeScript code without any explanations, comments, or additional information.
+            
+            Your primary task is to ensure that each error-indicated line is revised according to both the error messages and the `useful_info` documentation.
+            '''
         ),
     ]
 )
+
+QUERY_GENERATOR = ChatPromptTemplate.from_messages(
+    [
+        (
+            "system",
+            "You are a highly skilled front-end developer specializing in React and TypeScript. Your task is to generate precise search queries based solely on the provided TypeScript code and error messages."
+        ),
+        (
+            "human",
+            '''
+            Current code that contains errors:
+            {code}
+
+            List of identified errors in the code:
+            {errors_list}
+
+            Your task is to:
+            1. **Focus on extracting the interface mentioned in the error messages** where the props do not match (e.g., IntrinsicAttributes & IBox in the error).
+            2. Generate **targeted search queries** for this specific interface and its prop types.
+            3. If necessary, include the component and its required props from the code in the query.
+            4. Avoid generalizations and irrelevant details. Focus only on the interface and props mismatches as described in the error message.
+
+            Return a STRING of clean, concise queries for retrieving documentation or usage examples, separated by commas. Example output:
+            "IBox interface prop types for display, IBox usage example with children and flexDirection props"
+            '''
+        ),
+    ]
+)
+
+
 def get_ui_improvement_prompt(result, question):
     return f"""
     Given a code, check if it follows the provided design, use only provided components, don't change any imports.
@@ -309,6 +270,7 @@ def get_ui_improvement_prompt(result, question):
     all text in the code must be in russian.
     """
 
+
 def get_ui_description_prompt(question):
     return f"""
     Generate a detailed description for a user interface based on the following input: {question}
@@ -319,6 +281,7 @@ def get_ui_description_prompt(question):
     example output:
     {example_output}
     """
+
 
 def get_quick_improve_prompt(code, design, modification):
     return f"""
@@ -400,7 +363,6 @@ component_description = """
     }
 }
 """
-
 
 test_prompt = """
 

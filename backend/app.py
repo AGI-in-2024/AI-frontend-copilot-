@@ -3,9 +3,13 @@ from flask import Flask, request, jsonify, make_response
 from flask_cors import CORS  # Import CORS
 import traceback
 from langchain_openai import ChatOpenAI   # Import GPT-4
+from langchain_openai import ChatOpenAI   # Import GPT-4
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from backend.models.workflow import generate
+from backend.models.prompts import get_ui_improvement_prompt  # Import the new function
+from backend.models.prompts import get_ui_description_prompt
+from backend.models.prompts import get_quick_improve_prompt
 from backend.models.prompts import get_ui_improvement_prompt  # Import the new function
 from backend.models.prompts import get_ui_description_prompt
 from backend.models.prompts import get_quick_improve_prompt
@@ -38,6 +42,7 @@ async def generate_ui():
     app.logger.info(f"Received data: {data}")
 
     if not data or 'question' not in data:
+        return _handle_invalid_request()
         return _handle_invalid_request()
 
     question = data['question']
