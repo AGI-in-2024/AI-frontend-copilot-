@@ -13,6 +13,7 @@ from langgraph.constants import END
 from langgraph.graph import StateGraph
 from pydantic import BaseModel, Field
 from dotenv import load_dotenv
+from langchain.schema import Document
 
 from backend.models.prompts import code_sample, FUNNEL, CODER, DEBUGGER, FUNNEL_ITER, CODER_ITER, QUERY_GENERATOR
 from backend.models.tsxvalidator.validator import TSXValidator
@@ -122,7 +123,7 @@ async def funnel(state: InterfaceGeneratingState):
     return state
 
 
-async def search_docs(queries: list[str], is_dbg: bool = False):
+async def search_docs(queries: list[str], is_dbg: bool = False) -> List[Document]:
     logging.info(f"Looking for cached queries in {len(docs_cache)}...")
 
     def truncate_content(content):
@@ -148,11 +149,21 @@ async def search_docs(queries: list[str], is_dbg: bool = False):
         results = await asyncio.gather(*tasks)
 
         for i, result in enumerate(results):
+            processed_docs = []
             for doc in result:
-                doc.page_content = truncate_content(doc.page_content)
-            docs += result
-            docs_cache[qrs[i]] = result
-            dbg[qrs[i]] = result
+                if isinstance(doc, dict):
+                    # Create new Document from dict
+                    processed_doc = Document(page_content=doc['page_content'], metadata=doc.get('metadata', {}))
+                else:
+                    # Create new Document with truncated content
+                    processed_doc = Document(
+                        page_content=truncate_content(doc.page_content),
+                        metadata=doc.metadata
+                    )
+                processed_docs.append(processed_doc)
+            docs += processed_docs
+            docs_cache[qrs[i]] = processed_docs
+            dbg[qrs[i]] = processed_docs
 
     logging.info(f"{len(docs)} docs collected.")
     logging.info(dbg)
